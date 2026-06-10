@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../../models/pedido_produto.dart';
+import '../../models/pedido.dart';
 import '../../repositories/pedido_produto_repository.dart';
+import '../../repositories/pedido_repository.dart';
 import 'pedido_produto_form_screen.dart';
 
 class PedidoProdutoListScreen extends StatefulWidget {
@@ -13,67 +15,68 @@ class PedidoProdutoListScreen extends StatefulWidget {
 
 class _PedidoProdutoListScreenState extends State<PedidoProdutoListScreen> {
   final _repository = PedidoProdutoRepository();
-  List<PedidoProduto> _itens = [];
+  final _pedidoRepository = PedidoRepository();
+
+  List<PedidoProduto> _todosItens = [];
+  List<PedidoProduto> _itensFiltrados = [];
+  List<Pedido> _pedidos = [];
+  int? _filtroPedidoId; // null = "Todos"
+
   bool _carregando = true;
-  final _pedidoIdController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-    _carregarTodos();
+    _carregarTudo();
   }
 
-  Future<void> _carregarTodos() async {
+  Future<void> _carregarTudo() async {
     setState(() => _carregando = true);
     try {
-      final itens = await _repository.listarPorPedido(0);
+      final pedidos = await _pedidoRepository.listarTodos();
+
+      // Busca os itens de TODOS os pedidos e junta numa lista só
+      final List<PedidoProduto> todos = [];
+      for (final pedido in pedidos) {
+        final itens = await _repository.listarPorPedido(pedido.id!);
+        todos.addAll(itens);
+      }
+
       setState(() {
-        _itens = itens;
+        _pedidos = pedidos;
+        _todosItens = todos;
+        _aplicarFiltro();
         _carregando = false;
       });
     } catch (e) {
       setState(() => _carregando = false);
+      _mostrarErro('Erro ao carregar itens: $e');
     }
   }
 
-  Future<void> _buscarPorPedido() async {
-    final id = int.tryParse(_pedidoIdController.text);
-    if (id == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Informe um ID válido'),
-          backgroundColor: Colors.red,
-        ),
-      );
-      return;
-    }
-    setState(() => _carregando = true);
-    try {
-      final itens = await _repository.listarPorPedido(id);
-      setState(() {
-        _itens = itens;
-        _carregando = false;
-      });
-    } catch (e) {
-      setState(() => _carregando = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red),
-      );
+  void _aplicarFiltro() {
+    if (_filtroPedidoId == null) {
+      _itensFiltrados = List.from(_todosItens);
+    } else {
+      _itensFiltrados = _todosItens
+          .where((item) => item.pedidoId == _filtroPedidoId)
+          .toList();
     }
   }
 
   Future<void> _deletar(int id) async {
     try {
       await _repository.deletar(id);
-      _buscarPorPedido();
+      _carregarTudo();
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Erro ao deletar: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      _mostrarErro('Erro ao deletar: $e');
     }
+  }
+
+  void _mostrarErro(String msg) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
   }
 
   @override
@@ -88,41 +91,42 @@ class _PedidoProdutoListScreenState extends State<PedidoProdutoListScreen> {
         children: [
           Padding(
             padding: const EdgeInsets.all(12.0),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _pedidoIdController,
-                    decoration: const InputDecoration(
-                      labelText: 'Buscar por ID do Pedido',
-                      border: OutlineInputBorder(),
-                      prefixIcon: Icon(Icons.search),
-                    ),
-                    keyboardType: TextInputType.number,
-                  ),
+            child: DropdownButtonFormField<int?>(
+              value: _filtroPedidoId,
+              decoration: const InputDecoration(
+                labelText: 'Filtrar por Pedido',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.filter_list),
+              ),
+              items: [
+                const DropdownMenuItem<int?>(
+                  value: null,
+                  child: Text('Todos os pedidos'),
                 ),
-                const SizedBox(width: 8),
-                ElevatedButton(
-                  onPressed: _buscarPorPedido,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.purple,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
+                ..._pedidos.map(
+                  (p) => DropdownMenuItem<int?>(
+                    value: p.id,
+                    child: Text('Pedido #${p.id} — ${p.status}'),
                   ),
-                  child: const Text('Buscar'),
                 ),
               ],
+              onChanged: (v) {
+                setState(() {
+                  _filtroPedidoId = v;
+                  _aplicarFiltro();
+                });
+              },
             ),
           ),
           Expanded(
             child: _carregando
                 ? const Center(child: CircularProgressIndicator())
-                : _itens.isEmpty
+                : _itensFiltrados.isEmpty
                 ? const Center(child: Text('Nenhum item encontrado.'))
                 : ListView.builder(
-                    itemCount: _itens.length,
+                    itemCount: _itensFiltrados.length,
                     itemBuilder: (context, index) {
-                      final item = _itens[index];
+                      final item = _itensFiltrados[index];
                       return ListTile(
                         leading: const CircleAvatar(
                           backgroundColor: Colors.purple,
@@ -150,7 +154,7 @@ class _PedidoProdutoListScreenState extends State<PedidoProdutoListScreen> {
                                         PedidoProdutoFormScreen(item: item),
                                   ),
                                 );
-                                _buscarPorPedido();
+                                _carregarTudo();
                               },
                             ),
                             IconButton(
@@ -171,6 +175,7 @@ class _PedidoProdutoListScreenState extends State<PedidoProdutoListScreen> {
             context,
             MaterialPageRoute(builder: (_) => const PedidoProdutoFormScreen()),
           );
+          _carregarTudo();
         },
         child: const Icon(Icons.add),
       ),
